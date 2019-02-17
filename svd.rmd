@@ -1,0 +1,2440 @@
+---
+title: "SVD"
+author: "Shobha Mourya"
+date: "Feb 06, 2019"
+output: html_document
+---
+
+# Text Analytics using R
+
+This data science tutorial introduces viewers to the exciting world of text analytics with R programming.
+
+As exemplified by the popularity of blogging and social media, textual data is far from dead 
+- it is increasing exponentially! Not Surprisingly, knowledge of text analytics is a critical 
+skill for data scientists if this wealth of information is to be harvested and incorporated into 
+data products.
+
+This data science training provides introductory coverage of the following tools and techniques:
+  * ***Tokenization, stemming, and n-grams***
+  * ***The bag-of-words and vector space models***
+  * ***Feature engineering for textual data (e.g. cosine similarity between documents)***
+  * ***Feature extraction using singular value decomposition (SVD)***
+  * ***Training classification models using textual data***
+  * ***Evaluating accuracy of the trained classification models***
+
+
+
+Analysing SMS messages to build a model to predict a message as spam or illeligimate. Using spam.csv from Kaggle 
+
+Information Retrieval from unstructured text data using Natural Language Processing (NLP) uisng R packages like quanteda, Irla, e1071
+
+***irlba - feature extraction***
+svd function always returns a complete set of singular values, even if the number of singular 
+vectors nu or nv is set less than the maximum. The irlba function returns a number of estimated 
+singular values equal to the maximum of the number of specified singular vectors nu and nv.
+
+***e1071 - for SVM***
+main functions svm(), predict(), plot(), tune() to execute SVM in R
+
+***caret - The caret package (short for Classification And REgression Training)***
+contains functions to streamline the model training process for complex regression and 
+classification problems
+
+***randomForest - implements Breiman's random forest algorithm***
+(based on Breiman and Cutler's original Fortran code) for classification and regression 
+It can also be used in unsupervised mode for assessing proximities among data points
+
+# Workflow
+
+**Data Exploration of categorical, numerical data and text data**
+
+  * Analyse the categorical numerical data distribution
+  * Create new feature TextLength
+
+**Text Analytics**
+
+Here is a summary of the steps:
+
+- create stratified train and test dataset
+
+- start working with the train data until we build a model with desired
+acccuracy that can be used to on test data to predict the label ham or spam
+
+- tokenize train data and apply pre-processing using quanteda functions
+
+- create cross validation folds and control parameters for parallel processing
+
+- build single tree models using unigrams, normalize unigram matrix using TF-IDF, introduce word ordering with bigrams and againg normalize the ug & bg marix using TF-IDF, with bigrams addded the feature space just explodes so apply dimentionality reduction to normalized ug & bg matrix 
+
+- build the random forest ensemble model using svd matrix 
+- add the new feature TextLength to the ensemble model and interprete
+the confusion matrix
+- apply cosine similarity to the label values ham and spam and interprete the confusion matrix
+- remove the spam similarity and interprete the confusion matrix to see the performance improvement if any
+- apply the pre-processing to test data and predict using the train model
+- interpret the performance using confusion matrix.
+
+**Single Tree Model**
+
+1. rpart.cv.1 with unigrams
+- creating DTM for unigram, BoW model
+
+2. rpart.cv.2 with tf-idfed unigrams
+- applying TF-IDF to the normalize the sparse feature matrix of unigrams
+- penalizing terms that appear more often
+
+3. rpart.cv.3 with tf-idfed unigrams and bigrams
+- adding word ordering to improve predictive power
+
+4. rpart.cv.4 svd of tf-idfed unigrams and bigrams
+- Dimensionality reduction with Latent Semantic Analysis using 
+Single Value Decomposition 
+
+
+**Ensemble models**
+5. rf.cv.1 with svd of tf-idfed unigrams and bigrams
+- use random forest emsemble model on svd 
+
+6. rf.cv.2 include text length for svd of tf-idfed unigrams and bigrams
+- incorporate the Text Length feature in the ensemble model
+
+
+**Applying cosine similarity**
+7. rf.cv.3 cosine similarity between ham and spam messages
+- further scaling of features using cosine similarity of spam and ham messages 
+
+
+8. rf.cv.4 cosine similarity between only ham messages
+- remove the spam similarity
+
+
+# Environment: Install and load libraries
+
+```{r eval=FALSE}
+install.packages("ggplot2")
+install.packages("dplyr")
+install.packages("stringr")
+
+# Packages for text mining using Baga of Words 
+install.packages("quanteda")
+
+
+# Packages for Cross Validation folds, SVD, modeling
+#install.packages(c("e1071", "caret", "irlba", "randomForest"))
+install.packages("e1071")
+install.packages("caret")
+install.packages("irlba")
+install.packages("randomForest")
+
+# The doSNOW package to allow for multi-core training in parallel
+install.packages("doSNOW")
+```
+
+```{r warning=FALSE}
+#library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+```
+
+# Analysis of Imported Data
+
+```{r}
+# Load the csv file
+#spam.raw = read.csv("C:/shobha/R/SVD/spam.csv", stringsAsFactors=F)
+spam.raw <- readRDS("C:/shobha/R/SVD/spam.raw.rds")
+glimpse(spam.raw)
+#View(spam.raw[])
+names(spam.raw)
+```
+
+Only the first two variables have data.
+So we can remove the extraneous columns and rename the required columns as 
+label and text; for this we can take subset of data by extracting the first two columns
+
+```{r}
+spam.new = spam.raw[,1:2]
+names(spam.new)
+# Rename the columns
+names(spam.new) = c("label","text")
+head(spam.new)
+# Check if there are any NAs
+sum(complete.cases(spam.new))
+# Convert label into factor variable
+str(spam.new)
+```
+
+Both variables are characte
+
+```{r}
+unique(spam.new$label)
+```
+
+only two unique values
+
+```{r}
+spam.new$label = as.factor(spam.new$label)
+str(spam.new)
+levels(spam.new$label)
+```
+
+#Exploratory Analysis for Data Distribution
+
+```{r}
+# First lets see the distribution of label (ham vs spam)
+table(spam.new$label)
+prop.table(table(spam.new$label))*100
+```
+
+Number of spams is relatively small, our data is 86 percent legit and 13 percent spam.
+We need to account for this disparity while building the training and test dateset for the 
+prediction model. 
+It is good practise to see the distribution of your label for accuracy of prediction model.
+
+```{r}
+# Let's add a new feature text length
+spam.new$textLength = nchar(spam.new$text)
+str(spam.new)
+head(spam.new)
+summary(spam.new$textLength)
+```
+
+75 percent of the messages are 121 characters or less.
+Also based on contingency table, most of our messages are ham, so can we say that 
+ham messages are less than 121 characters. 
+Mean is greater than median, it is right skewed, tail on right - so there are fewer long messages.
+Lets plot different graphs for the distribution to see if there is any skew.
+
+```{r}
+#Distribution ham spam over length
+ggplot(spam.new, aes(x = textLength)) +
+  geom_density()
+```
+The density plot of text length for the entire data shows two peaks/modes.
+```{r}
+#Let's plot separately for ham and spam
+
+hamMsg = spam.new %>% filter(label == "ham") %>% select(c("label","textLength"))
+head(hamMsg)
+
+spamMsg = spam.new %>% filter(label == "spam") %>% select(c("label","textLength"))
+head(spamMsg)
+
+ggplot(hamMsg, aes(x = textLength)) +
+  geom_density() +
+  ggtitle("Distribution of Ham Msgs")
+
+ggplot(spamMsg, aes(x = textLength)) +
+  geom_density() +
+  ggtitle("Distribution of Spam Msgs")
+```
+
+Interesting to see that ham messages have left skewed distrbution 
+indicating these messages are shorter length.
+Whereas spam messages are rather long, more than 120 characters.
+So length of text has good predictive power.
+<check again>
+
+```{r}
+#Lets plot histogram for textLength to see the entire distribution wrt label
+ggplot(spam.new, aes(x=textLength, fill = label)) +
+  geom_histogram(binwidth = 5) +
+  xlab("Text Length") +
+  ylab("Count") +
+  ggtitle("Distribution of Text Length")
+
+#Let's split the graph for each label
+ggplot(spam.new, aes(x = textLength, fill = label)) +
+  geom_histogram() +
+  facet_wrap(~label)
+```
+Save the span.new object
+```{r eval=FALSE}
+saveRDS(spam.new, "C:/shobha/R/SVD/spam.new.rds")
+spam.new <- readRDS("C:/shobha/R/SVD/spam.raw.rds")
+```
+
+#Stratified splitting of data
+
+***What is Generalization?***
+
+In machine learning or data science in general we are obssessed with creating
+models we can put in production and our business constituents can use to produce the desired 
+business results - in ML and DS circles that is known as generalization.
+
+***Can your model generalize and perform well on data we have never seen before?***
+
+So we have to split our data to get a sense of how well it will work in real world.
+
+At a minimum we need to split our data into a training set and a test set. In a true project
+we would want to use a three-way split of training, validation, and test.
+We test our model for improvement on validation set and do the final testing on test set
+
+As we know that our data has non-trivial class imbalance we'll use the caret package to 
+create a random train/test split that ensures the correct ham/spam class label proportions. 
+(i.e., we'll use caret for a random stratified split) stratified split maitains the ratio of 
+label proportions in the subsets representing the splits
+
+if you are using R as primary tool, caret is very useful more than 200 ML algorithms
+
+```{r eval=FALSE}
+help(package = "caret")
+```
+
+Use caret to create a 70%/30% stratified split 
+Set the random seed for reproducibility. 
+If we just did the normal split we may not have the actual representative of the original 
+data set that is 86/13 
+Maintaining this proportion across the splits is called stratified split
+
+```{r}
+library(caret)
+
+set.seed(32984)
+indexes = createDataPartition(spam.new$label, 
+                              times=1, 
+                              p=0.7, 
+                              list=FALSE)
+
+indexes[1:20]
+
+train = spam.new[indexes,]
+test = spam.new[-indexes, ]
+str(train)
+str(test)
+prop.table(table(train$label))*100
+prop.table(table(train$label))*100
+
+#saveRDS(train, "C:/shobha/R/SVD/train.rds")
+#train <- readRDS("C:/shobha/R/SVD/train.rds")
+#saveRDS(test, "C:/shobha/R/SVD/test.rds")
+#test <- readRDS("C:/shobha/R/SVD/test.rds")
+```
+
+# Text mining, starting with pre-processing pipeline
+
+***The core idea we need to get our head around is this - how do we represent text as a data frame?***
+
+R only understands dataframes,how dow we represent unstructured data and make it structured.
+The process by which we do that is tokenization.
+
+Let's take the following hypothetical document:
+'if it looks like a duck, swims like a duck, and
+ quacks like a duck then it probably is a duck'
+
+
+First step in representation is decomposing a text document into distinct pieces or tokens
+Applying tokenization to our hypothetical document could produce the following tokens
+
+[if] [it] [looks] [like] [a] [duck] [,] [swims]
+[like] [a] [duck] [,] [and] [quacks] [like] [a] [duck]
+[,] [then] [it] [probably] [is] [a] [duck] [.]
+
+tokenization is a broad subject,we're going to use the simplest approach Document-Frequency Matrix (DFM)
+
+With tokenization complete, it is possible to construct a data frame (i.e., a matrix) where:
+  * each row represents a document, in our case each row will be texts in one sms
+  * each column represents a distinct token
+  * each cell is a count of the token for a document
+
+            Terms
+ Doc-id      if it looks like a duck , swims and quacks then probably is
+ text1        2  2   1    3    4  4   3   1    1   1      1    1        1  
+ 
+***Bag of Words (BoW) Model***
+
+Word ordering is not preserved, this is known as the 'bag-of-words' model.
+We can do a lot by just using the frequencies without the ordering
+This will be used in 80% of your models 
+  * classification models
+  * legal briefs
+  * loan documents
+
+N-grams can be used to add word order back in. BoW model is the defacto model
+
+***Some considerations***
+
+Pre-processing is a major part of text analytics!
+Because you are dealing with dirtiest of dirtiest data
+
+These are all things you need to consider when you're doing DFM
+  * Do we want all tokens to be terms in our DFM?
+  * Casing (e.g., if vs If), genearally speaking it doesn't matter so we get rid of all casing
+  * punctuation (e.g., ', ?,!. etc.) ? we don't need punctuations as word ordering is not maintained
+  * Numbers (e.g., 0,56,109, etc.)?
+  * Every word (e.g., the, an, a, etc)? stop words don't add any symantic just to add flow
+  * Symbols (e.g., <,@,#,etc)
+  * What about similar words (e.g., ran, run, runs, running)? that is stemming, collapse down words 
+  into single representation, context is determined by other words 
+  we take words that are similar and collapse them into the origin of the word that is the stem ran runs   running change to run context is human being runningif ran run running is related to computer system then too it would be run
+
+```{r}
+library(quanteda)
+#help(package = "quanteda")
+```
+
+Title: Quantitative Analysis of Textual Data
+Description: A fast, flexible toolset for for the management, processing, and
+uantitative analysis of textual data in R.
+You can do away with tm - text mining package
+
+Now we will go through text data preprocessing pipeline
+So first up we're going to leverage quanteda package's 
+
+```{r eval=FALSE}
+?tokens
+```
+
+tokens(x, what = c("word", "sentence", "character", "fastestword",
+"fasterword"), remove_numbers = FALSE, remove_punct = FALSE,
+remove_symbols = FALSE, remove_separators = TRUE,
+remove_twitter = FALSE, remove_hyphens = FALSE, remove_url = FALSE,
+ngrams = 1L, skip = 0L, concatenator = "_", hash = TRUE,
+verbose = quanteda_options("verbose"), include_docvars = TRUE, ...)
+
+```{r eval=FALSE}
+?tokens_select
+```
+
+data, pattern, selection
+tokens_select(x, pattern, selection = c("keep", "remove"),
+valuetype = c("glob", "regex", "fixed"), case_insensitive = TRUE,
+padding = FALSE, verbose = quanteda_options("verbose"))
+
+tokens_remove(x, pattern, valuetype = c("glob", "regex", "fixed"),
+case_insensitive = TRUE, padding = FALSE,
+verbose = quanteda_options("verbose"))
+Arguments
+
+```{r}
+train.tokens = tokens(train$text, what = "word", 
+                      remove_numbers = TRUE,
+                      remove_punct = TRUE,
+                      remove_symbols = TRUE,
+                      remove_hyphens = TRUE)
+
+# Take a look at a specific SMS message and see how it transforms
+train.tokens[[357]]
+
+# Lower case the tokens
+train.tokens = tokens_tolower(train.tokens)
+train.tokens[[357]]
+
+# Let's remove the stopwords, always inspect stopword lists for applicability to your
+# problem domain
+train.tokens = tokens_remove(train.tokens,stopwords())
+train.tokens[[357]]
+
+#Now, lastly we're going to stem
+train.tokens = tokens_wordstem(train.tokens, language = "english")
+train.tokens[[357]]
+
+#saveRDS(train.tokens, "C:/shobha/R/SVD/train.tokens.rds")
+#train.tokens = readRDS("C:/shobha/R/SVD/train.tokens.rds")
+```
+
+# Create our first bag-of-words model
+
+```{r eval=FALSE}
+# Our preprocessed tokens will be stored in dfm
+?dfm
+```
+
+Construct a sparse document-feature matrix, 
+from a character, corpus, tokens, or even other dfm object.
+
+dfm(x, tolower = TRUE, stem = FALSE, select = NULL, remove = NULL,
+dictionary = NULL, thesaurus = NULL, valuetype = c("glob", "regex",
+"fixed"), groups = NULL, verbose = quanteda_options("verbose"), ...)
+
+```{r}
+train.tokens.dfm = dfm(train.tokens, tolower = F)
+dim(train.tokens.dfm)
+str(train.tokens.dfm)
+
+# Transform to a matrix and inspect
+train.tokens.matrix = as.matrix(train.tokens.dfm)
+str(train.tokens.matrix)
+
+dim(train.tokens.matrix)
+dim(spam.new)
+
+# Let's view the first 20 texts for 100 tokens
+train.tokens.matrix[1:20, 1:10]
+# Most of the times you will see zeros
+```
+
+# Curse of Dimensionality in Text Analytics
+
+Feature space explodes and dimentionality increases dramatically.
+We also have the sparsity problem due to the zeros. 5742 number of columns is too high
+Investigate the effects of stemming
+
+```{r}
+colnames(train.tokens.matrix)[1:50]
+#saveRDS(train.tokens.matrix, "C:/shobha/R/SVD/train.tokens.matrix.rds")
+#train.tokens.matrix <- readRDS("C:/shobha/R/SVD/train.tokens.matrix.rds")
+```
+
+# Our First Model
+
+This part includes specific coverage of:
+
+- Correcting column names derived from tokenization to ensure smooth model training
+- Using caret to set up stratified cross validation
+- Using the doSNOW package to accelerate caret machine learning training 
+by using multiple CPUs in parallel
+- Using caret to train single decision trees on text features and 
+tune the trained model for optimal accuracy
+- Evaluating the results of the cross validation process
+
+***Cross Validataion***
+CV allows us to best use our training data.
+
+Per best practices, we will leverage cross validation (CV) as the basis of our modeling process. 
+Using CV we can create estimates of how well our model will do in Production on new,
+unseen data. 
+CV is powerful, but the downside is that it requires more processing and therefore more time.
+
+If you are not familiar with CV, consult the following wikipedia article:
+[Cross Validation](https://en.wikipedia.org/wiki/Cross-validation_(statistics))
+
+```{r}
+train.tokens.df = cbind(label = train$label, as.data.frame(train.tokens.matrix))
+dim(train.tokens.df)
+names(train.tokens.df[1:3])
+names(train.tokens.df)[c(146, 148, 235, 238)]
+```
+
+Often, tokenization requires some additional pre-processing
+Wrangling data is part and parcel of ML and it is even more imp in text analytics
+because quite frankly text data tends to be quite dirty
+
+```{r eval=FALSE}
+?make.names
+```
+
+Description
+Make syntactically valid names out of character vectors.
+make.names(names, unique = FALSE, allow_ = TRUE)
+
+```{r}
+names(train.tokens.df) = make.names(names(train.tokens.df))
+```
+
+Now our data is ready to train our first model
+Use caret to create stratified folds for 10-fold cross validation repeated 3 times 
+(i.e., create 30 random stratified samples )
+
+```{r}
+set.seed(48743)
+cv.folds = createMultiFolds(train$label, k=10, times=3)
+```
+Instructions for cv, we pass cv.folds to get the stratified folds
+this is like defining the train process.
+```{r}
+cv.cntrl = trainControl(method = "repeatedcv", 
+                        number = 10,
+                        repeats =3,
+                        index = cv.folds)
+
+```
+
+```{r}
+save(cv.folds, cv.cntrl, file = "C:/shobha/R/SVD/stratified_data.RData")
+load("C:/shobha/R/SVD/stratified_data.RData")
+```
+
+
+
+# Parallel execution
+
+Our data frame is non-trivial in size.
+To cut down on total execution time, use the doSNOW package to allow for multi-core training in parallel.
+
+WARNING - The following code is configured to run on a workstation or server-class machine 
+(i.e., 12 logical cores)
+Alter code to suit the HardWare environment. doSNOW works on Windows and Machintosh
+The code by default is setup for server-class machine change the cluster size to 3 instead of 10
+check performance in Task manager to find cores we will create only 3 clusters
+Socket cluster - cluster creates multiple instances of Rstudio and allows caret to borrow those instances 
+the more instances of Rstudio that much more CPU will be used 
+Build and then register the clusters
+
+As our data is non-trivial in size at this point use a single decision tree algorithm as 
+our first model. We will graduate to using more powerful algorithms later when we perform feature 
+extraction to shrink the size of our data.
+
+The train function of caret allows you to build your model.
+Notice that there is a method parameter which tells caret what ML algorithm to use
+You can use xboost decision tree or random forest(rf), it highly configurable
+rpart is a single decision tree which trains faster.
+rf would take lot longer to train because it is a collection of trees
+
+Predict label by all the rest of the data 
+data is stored in df we created
+train controll should follow cv.cntrl
+tuneLength tells the train function to try 7 different 
+for now I will try only 1 as it is erroring out
+configuration for the rpart method and see which one works
+best on the data
+
+Since my system is dual core with 4 logical processors
+Check performance in Task manager to find cores
+We will create only 3 clusters
+Socket cluster - cluster creates multiple instances of Rstudio
+and allows caret to borrow those instances 
+The more instances of Rstudio that much more CPU will be used.
+
+```{r eval=FALSE}
+# Time the code execution
+start.time = Sys.time()
+
+# Build and then register the clusters
+cl = makeCluster(3, type="SOCK")
+registerDoSNOW(cl)
+
+
+# Create data for modeling without the label
+ncol(train.tokens.df)
+
+#data.df = train.tokens.df[,2:ncol(train.tokens.df)]
+data.df = train.tokens.df[,-1]
+
+head(names(data.df))
+
+
+rpart.cv.1 = train(x = data.df, 
+                   y = train.tokens.df$label,
+                   method = "rpart",
+                   trControl = cv.cntrl, 
+                   tuneLength = 7)
+
+
+# Processing is done, stop cluster
+# free up the resources on the computer
+
+stopCluster(cl)
+
+# Total time of execution on workstation was approximately 4 minutes
+total.time = Sys.time() - start.time
+total.time
+
+
+# Check our cv results
+rpart.cv.1
+
+# Save the model as rds
+saveRDS(rpart.cv.1, "C:/shobha/R/SVD/rpart.cv.1.rds")
+```
+
+```{r}
+rpart.cv.1 <- readRDS("C:/shobha/R/SVD/rpart.cv.1.rds")
+rpart.cv.1
+```
+
+# Interprete rpart.cv.1 model 
+
+So we saw DTF matrix representation of our text data to train a  
+single decision tree model with 10-fold CV produces a model with 
+94 % accuracy to predict ham messages from spam messages.
+
+Taking our free form data and applying pre-processing pipeline, 
+ignoring context, we can rely on BoWs model we can get a lot of 
+power from this model but still there is room for improvement.
+
+Let's see if normalization on this BoWs model helps improve accuracy of the model.
+
+
+# TF-IDF
+
+This part includes specific coverage of:
+
+  * Discussion of how the document-term-frequency matrix representation can be improved
+  * How to deal with documents of unequal lengths
+  * What to do about terms that are very common across documents
+  * Introduction of the term-frequency inverse-document-frequency (TF-IDF) implement these improvements
+
+  * TF for dealing with documents of unequal lengths
+  * IDF for dealing with terms that appear frequently across documents
+  * Data cleaning of matrices post TF-IDF weighting/transformation
+
+
+Long documents will tend to have higher term counts. Terms that appear frequently across the 
+corpur aren't as important for example, every article on baseball is corpus it is highly likely that 
+some of the words like umpire will appear in all documents. Term baseball will appear in all documents, 
+it does not provide more information.
+
+We can improve upon our dtm if we can achieve normalised documents based on their length 
+because we are interested in words. Penalize terms that occur frequently across the corpus
+if basebal appears in all documents, it can be penalized because it does not add any predictive power.
+
+Term Frequency 
+ - count of instances of term t in document d
+ - how many times the term appears in that document
+TF(t,d) 
+ - proportion of the count of term in t in document d
+ - freq / total number of terms
+ - TF(t,d) = freq(t,d)/Sum of all frequencies of terms
+
+ So this is how we normalize the documents
+ we don't care about the length, its the TF we care about
+
+Inverse Document Frequency
+ - Let N be the count distinct documents in the corpus
+ For example, 1000 sports articles
+ - Let count(t) be the count of the documents in the corpus, 
+ the number of articles the word baseball appears
+ suppose it appears in all articles, then t is 1000
+ in which the term t is present
+ IDF(t) = log(N/count(t))
+
+So it penalises the terms that appears in every document
+So for term baseball IDF will be log of 1 which is zero
+it doesn't provide any information useful for prediction.
+
+
+# Lets write custom functions for TF, IDF and TF-IDF
+
+Our function for calculating relative term frequency (TF)
+input a vector of all term frequenies in a document
+Calculates an new value for each cell in matrix wrt row sum and returns a vector array
+So you can pass rows as vector input.
+
+```{r}
+term.frequency = function(row){
+  row/sum(row)
+}
+```
+
+our function for calculating inverse document frequency (IDF)
+input: vector of freq of single term in different documents
+Calculates occurence of term in entire corpus
+
+```{r}
+inverse.doc.freq = function(col){
+  # How many documents
+  corpus.size = length(col)
+  # In how many documents the term appears
+  # that is the value is non-zero
+  doc.count = length(which(col > 0))
+  
+  # Use base 10 log
+  log10(corpus.size / doc.count)
+  
+}
+```
+
+Our function for calculating TF-IDF
+```{r}
+tf.idf = function(tf,idf) {
+  tf*idf
+}
+```
+
+```{r}
+train.tokens.matrix[1:5,1:5]
+```
+
+To get the term frequency wrt to each document we pass the rows to term frequency function
+
+```{r}
+train.tokens.tf = apply(train.tokens.matrix,1, term.frequency)
+dim(train.tokens.tf)
+train.tokens.tf[1:5, 1:5]
+```
+
+Returns data frame with terms as rows columns are the text-ids and cells are the term frequency
+
+Next we penalize the terms that occur in many documents.
+So we pass the term frequencies, that is columns, and get an array of idf values for each term.
+Note, this is like an array of constants, not a dataframe.
+
+```{r}
+train.tokens.idf = apply(train.tokens.matrix, 2, inverse.doc.freq)
+str(train.tokens.idf)
+train.tokens.idf[1:5]
+```
+
+Returns a named array with idf for each term
+
+Now, for each term in tf dataframe we multiply with the it's idf to get teh TF-IDF wrt each document
+
+```{r}
+train.tokens.tfidf = apply(train.tokens.tf, 2, tf.idf, idf = train.tokens.idf)
+dim(train.tokens.tfidf)
+train.tokens.tfidf[1:5, 1:5]
+```
+
+terms are rationalised 
+- numbers that appear more often will be rationalised 
+- jurong has higher score than term go
+
+Transpose the matrix
+- because for training models we need the original dtm
+
+```{r}
+train.tokens.tfidf = t(train.tokens.tfidf)
+dim(train.tokens.tfidf)
+train.tokens.tfidf[1:5, 1:5]
+```
+
+Check for incomplete cases
+Pre-processing may result in empty strings and numerical operations on empty strings 
+result in NaN
+Example of an empty string is text that contains only stopwords and punctuations
+
+```{r}
+incomplete.cases = which(!complete.cases(train.tokens.tfidf))
+incomplete.cases
+train$text[incomplete.cases]
+train.tokens.tfidf[176,1:10]
+```
+
+All the terms for an empty string will have the cell value as NaN. So we replace them with 0.0
+
+For any row in tfidf which is incomplete replace all columns with 0.0
+
+```{r}
+train.tokens.tfidf[incomplete.cases,] = rep(0.0, ncol(train.tokens.tfidf))
+dim(train.tokens.tfidf)
+train.tokens.tfidf[176,1:10]
+sum(complete.cases(train.tokens.tfidf))
+```
+
+Now, let create df for building our model with tf-idfed values.
+
+```{r}
+train.tokens.tfidf.df = cbind(label=train$label, as.data.frame(train.tokens.tfidf))
+dim(train.tokens.tfidf.df)
+names(train.tokens.tfidf.df)[1:10]
+names(train.tokens.tfidf.df) = make.names(names(train.tokens.tfidf.df))
+```
+
+We created a nice clean df that was populated tf-idf transformed term frequency.
+In theory tf-idf improves upon our base representation dtf
+dtf is powerful but docs of different lengths have different counts
+longer documents will have more counts of the same term
+and second is that terms that appear in most documents 
+don't have that much of predictive power
+so we saw how tf-idf addresses both these problems mathematically
+Now, lets see if cv model shows any improvement
+
+```{r eval=FALSE}
+# Time the code execution
+start.time = Sys.time()
+
+cl = makeCluster(3, type="SOCK")
+registerDoSNOW(cl)
+
+#data.df = train.tokens.df[,2:ncol(train.tokens.df)]
+data.tfidf.df = train.tokens.tfidf.df[,-1]
+head(names(data.tfidf.df))
+
+rpart.cv.2 = train(x = data.tfidf.df, 
+                   y = train.tokens.tfidf.df$label,
+                   method = "rpart",
+                   trControl = cv.cntrl, 
+                   tuneLength = 7)
+
+
+# Processing is done, stop cluster
+# free up the resources on the computer
+stopCluster(cl)
+
+# Total time of execution on workstation was approximately 4 minutes
+total.time = Sys.time() - start.time
+total.time
+
+# Check our cv results
+rpart.cv.2
+```
+
+CART 
+
+3901 samples
+5742 predictors
+   2 classes: 'ham', 'spam' 
+
+No pre-processing
+Resampling: Cross-Validated (10 fold, repeated 3 times) 
+Summary of sample sizes: 3510, 3511, 3511, 3511, 3512, 3511, ... 
+Resampling results across tuning parameters:
+
+  cp          Accuracy   Kappa    
+  0.01529637  0.9451463  0.7578777
+  0.01912046  0.9394202  0.7295810
+  0.02103250  0.9378827  0.7206827
+  0.02294455  0.9372841  0.7162683
+  0.02868069  0.9364310  0.7107710
+  0.07138305  0.9187424  0.5604617
+  0.32504780  0.8820822  0.1753720
+
+Accuracy was used to select the optimal model using the largest value.
+The final value used for the model was cp = 0.01529637.
+
+# Including Word Order to improve accuracy of single tree model 
+
+To build rpar.cv.3 model with unigrams and bigrams
+
+This part includes specific coverage of:
+  * Validate the effectiveness of TF-IDF in improving model accuracy
+  * Introduce the concept of N-grams as an extension to the bag-of-words
+model to allow for word ordering
+  * Discuss the trade-offs involved and how Text Analytics suffers
+from the 'Curse of Dimensionality'
+  * illustrate how quickly Text Analytics can strain the limits of
+your computer hardware
+
+
+*** What are N-grams? ***
+
+Our representations so far have been single terms, these are known as unigrams or 1-gram
+not surprisingly there are also bigrams, trigrams, 4-grams 5-grams, etc.
+N-grams allow us to extend the bows model to include word ordering.
+it won't be full blown language analysis of all terms but at the end of pre-processing pipeline 
+we can still extend our data to include word ordering
+
+N-grams allow us to augment our document-term frequency matrices with word ordering
+This often leads to increased performance (e.g., accuracy) for machine learning models trained 
+with more than just unigrams (i.e., single terms)
+Let's add bigrams to our training data and the TF-IDF transform the expanded feature matrix 
+to see if accuracy improves
+
+Remember our sample document
+'if it looks like a duck, swims like a duck, and quacks like 
+ a duck, then it probably is a duck'
+ 
+Given our data pre-processing pipeline we transform the above
+into something like
+
+'look like duck swim like duck quack like duck probabl duck'
+
+eventhough it is not proper english this representation not ideal 
+captures the essence of what original document wants to say
+we can create dtf matrix from this and then make tf-idf to make it more valuable
+
+Adding Bi-grams
+Let's revisit our sample document and add bi-grams to the mix Processed data:
+take two terms next to each other and treat like single term look-like like-duck duck-swim swim-like 
+like-duck and so on join words left and right
+
+bi-grams add power but we've more than doubled the total size of our matrix
+not only do you pay the price in terms of exploded matrix but also add to the sparsity
+because most of the times most of the documents will not have the bi-grams
+very very large and very very sparse matrices is know as the curse of dimensionality problem
+you have to be cognizant of that.
+
+
+Add bigrams to our feature matrix
+n=1, is the default, basic BOWs model
+n=1:2 is give unigrams and bigrams
+
+bi-grams from our pre-processed tokens
+train.tokens = tokens_ngrams(train.tokens, n = 1:2)
+
+```{r}
+train.tokens.ug.bg = tokens_ngrams(train.tokens, n = 1:2)
+str(train.tokens.ug.bg)
+train.tokens.ug.bg[[357]]
+train.tokens.ug.bg.dfm = dfm(train.tokens.ug.bg, tolower = FALSE)
+train.tokens.ug.bg.matrix = as.matrix(train.tokens.ug.bg.dfm)
+str(train.tokens.ug.bg.matrix)
+
+# Normalize all documents via TF
+train.tokens.ug.bg.tf = apply(train.tokens.ug.bg.matrix, 1, term.frequency)
+
+# Calculate the IDF vector that we will use for training
+# and test data!
+train.tokens.ug.bg.idf = apply(train.tokens.ug.bg.matrix, 2, inverse.doc.freq)
+
+
+# Calculate TF-IDF for our training corpus
+train.tokens.ug.bg.tfidf = apply(train.tokens.ug.bg.tf, 2, tf.idf, 
+                                 idf = train.tokens.ug.bg.idf)
+
+# Transpose the matrix
+train.tokens.ug.bg.tfidf = t(train.tokens.ug.bg.tfidf)
+
+# Fix incomplete cases
+incomplete.cases = which(!complete.cases(train.tokens.ug.bg.tfidf))
+
+length(incomplete.cases)
+incomplete.cases
+
+# For rows that are not complete, replace with 0.0 
+train.tokens.ug.bg.tfidf[incomplete.cases,] = rep(0.0, ncol(train.tokens.ug.bg.tfidf))
+
+train.tokens.ug.bg.tfidf[176,]
+
+# Make a clean data frame
+train.tokens.ug.bg.tfidf.df = cbind(label = train$label,
+                                    data.frame(train.tokens.ug.bg.tfidf))
+
+names(train.tokens.ug.bg.tfidf.df) = make.names(names(train.tokens.ug.bg.tfidf.df))
+
+```
+
+# Considerations before we start training the model
+
+Note - The following code requires the use of command-line R to execute
+due to the large number of features (i.e., columns) in the matrix
+Please consult the following link for more details if you wish to 
+run the code yourself:
+
+[Parallel Execution](https://stackoverflow.com/questions/28728774/how-to-set-max-ppsize-in-r)
+
+Also note that running the following code required approximately 38GB of RAM and more than 4.5 hours 
+to execute on a 10-core workstation!
+
+Rent yourself a large VM
+In this age of the cloud, scalability is not that big an issue
+
+```{r eval=FALSE}
+# Clean up unused objects in memory
+gc()
+```
+
+Leverage single decision trees to evaluate if adding bigrams improves
+the effectiveness of the model
+
+```{r eval=FALSE}
+# Time the code execution
+start.time = Sys.time()
+
+
+cl = makeCluster(3, type="SOCK")
+registerDoSNOW(cl)
+
+
+#data.df = train.tokens.df[,2:ncol(train.tokens.df)]
+data.tfidf.df = train.tokens.ug.bg.tfidf.df[,-1]
+
+head(names(data.tfidf.df))
+
+
+rpart.cv.3 = train(x = data.tfidf.df, 
+                   y = train.tokens.ug.bg.tfidf.df$label,
+                   method = "rpart",
+                   trControl = cv.cntrl, 
+                   tuneLength = 7)
+
+
+stopCluster(cl)
+
+# Total time of execution on workstation was approximately 4 minutes
+total.time = Sys.time() - start.time
+total.time
+
+rpart.cv.3
+```
+
+The result of the above processing show a slight decline in rpart
+effectiveness with a 10-fold CV repeated 3 times accuracy of 0.9457
+As we will discuss later, while the addition of bigrams appear to
+negatively impact a single decision tree, it helps with the mighty
+random forest!
+ 
+Previously with unigram with single decison tree it was 0.97
+Will bigrams always improve the model? Well, it depends.
+While it affected rpart single tree model it might improve with random forest model
+So it might hurt some models while help other models - you need to test it all out
+If you knew all this stuff apriori (aa priori) what was going to work and what not
+then this could have been 
+commotized or automated - which as of now, at the time of this recording, it cannot be
+and hence DS cannot be automated that is the part and parcel of DS understanding the tools 
+at our disposal, exploring the options, understanding the trade-offs and using the right tool.
+
+# VSM, LSA & SVD
+
+This part includes specific coverage of:
+  
+  * the trade-offs of expanding the text analytics feature space with n-grams
+  * how bag-of-words representations map to the vector space model (VSM)
+  * usage of the dot product between document vectors as a proxy for correlation
+  * latent semantic analysis (LSA) as a means to address the curse of dimensionality in text analytics
+  * how LSA is implemented using singular value decomposition (SVD)
+  * mapping new data into the lower dimensional SVD space
+
+
+# Curse of dimensionality 
+
+Number of rows is far less the number of columns, this is a very common problem in TA.
+Most of the columns were empty, 99.9 % of the cells have value zero.
+Any particular combination of two or three words occuring together in any document is zero
+
+We got this new data frame, we have been using single tree decision trees,
+but what is the efficacy?
+
+*** What is LSA?***
+As it will turn out that adding bigrams to our feature matrix is the right tool for this 
+There are tools that can help us to improve accuracy.
+
+We have this very very large data frame. It took us an awful lot of RAM and an awful 
+lot of time on a pretty beefy machine to actually work with this data.
+And we also know that there is a lot of sparsity too, most of the data we're working with is zero,
+We're going to do LSA,
+
+LSA - singular value decomposition, a feature Reduction methodology
+It is not as difficult as you think. How we can improve this representation of data withhighly sparsed 29 thousand columns?
+
+
+Our Progress So Far. We've made a lot of progress:
+
+  * Representing unstructured text data in a format amenable to analytics and machine learning 
+  * Building a standard text analytics data pre-processing pipeline
+  * Improving the bag-of-words model (BOW) with the use of the mighty TF-IDF
+  * Extending BOW to incorporate word ordering via n-grams
+ 
+
+Howerver, we've encountered some notbale problems as well:
+
+  * Document-term matrices explode to be very wide (i.e., lots of columns)
+  * the features of document-term matrices don't contain a lot of signal (i.e., they're sparse)
+  * We're running into scalability issues like RAM and huge amounts of computation
+  * The curse of dimensionality
+
+The vector space model helps address many of the problems above
+
+The Vector Space Model Core intuition 
+  * we represent documents as vectors of numbers
+  * Our representation allows us to work with document geometrically
+
+Take the hypothetical document-term : three documents, two terms
+bar foo
+6   10
+10  3
+8   7"
+
+Visualizing Vector Space
+- Given that we have only two terms, we can visualize our documents
+using a 2D plane
+- Foo Vs Bar along X, Y axis
+- If we assume that all document vectors originate from the origin
+(0,0) we can plot each document on the plane
+- points (6,10) (10,3) (8,7)
+- drawing a line from origin to the point (6,10) is simply
+the vector representation of document 1
+- this gives us a lot of power
+- if you take a look at this geometric representation
+- you can say that my intuition says that
+- doc3 is more like doc1 than doc2 is, and reflexively
+- doc2 seems to be more like doc3 than doc1 is 
+- and infact your intuition would be exactly correct
+- benefit of thinking of our model geometrically is that 
+we can take advantage of mathematics for example we can use
+trigonometric functions to analyse the angles between these documents
+and understand them
+
+Dot Product of Two Vectors
+Intuition - we can think of the dot product of two document vectors
+as a proxy for correlation
+Dot Product of A,B = A.B = Sum of Ai*Bi for i 1 to n
+for the above bar foo example - points (6,10) (10,3) (8,7)
+Doc1.Doc2 = 6*10 + 10*3 = 90
+Doc1.Doc3 = 6*8 + 10*7 = 118
+Doc2.Doc3 = 10*8 + 3*7 = 101
+
+The dot products aligns to our geometric understanding 
+(e.g., Doc1 and Doc3 are most alike)
+so our intuition that doc1 is more like doc3 than doc2
+actually matches the numbers
+thus dot product is immensely useful
+
+Dot Products of Documents
+As dot products of document vectors are useful
+we can leverage matrix multiplication to calculate
+all of them all at once
+
+- points (6,10) (10,3) (8,7)
+Given the document-term frequency matrix
+- first row multiply with first column, first row second col, first row third col
+- second row first col, and so on
+[6 10   [6 10 8     [136  90 118]
+ 10 3    10 3 7] =  [90  109 101]
+  8 7]              [118 101 113]     
+
+*V V Imp*
+Intuition - the dot product of the documents is indicative
+of document correlation given the set of matrix terms
+
+Dot Products of Terms
+We can think of correlation in terms of verticle
+that is in terms of Terms instead of Documents
+We can also take the perspective of taking
+the dot products of ther terms in the document-term frequency matrix
+Dot Product of all Terms = X^T*X
+[6 10 8 * [6 10  
+10 3 7]   10 3  =  [200 146
+           8 7]     146 158]
+each term has a higher correlation with itself than with the other
+this is not so useful with just two terms
+but with very large feature matrix it can be very very useful
+what terms have high correlation
+e.g., loan, credit card, debt - have high probability of showing 
+in same document
+so they can be collapsed in to a single column that represents
+some higher level common concept
+
+Latent Semantic Analysis
+Intuition - Extract relationships between the documents and terms
+assuming that terms that are close in meaning will appear in similar
+(ie., correlated) pieces of text
+
+Implementation - LSA leverages a singular value decomposition
+(SVD) factorization of a term-document matrix to extract these
+relationships
+SVD of X = X (we'll need to transpose our matrix) = U(Sum of matrix V transposed)
+term document matrix - rows terms, cols docs
+document term matrix - rows documents, cols terms
+
+Where:
+U contains the eigenvectors of the term correlations, XX^T
+V contains the eigenvectors of the document correlations, X^TX
+Sum contains the singulars values of the factorization
+ 
+What do these pieces mean:
+matrix U contains term correlations
+matrix V contains document correlations
+at higher level of semantics
+containing higer level of construct
+thus not only reduced columns but also increased the signally
+
+So, here's the intuition
+I'd like to extract relationships between terms and documents
+is there some sort of probablistic mechanism or mathematical 
+way of saying 
+based on the correlation of how certain terms appear all across
+the documents in my corpus can I essentially extract out core concepts
+that are not manifest in the document
+eg., merge laon credit card debt in to one concept of debt
+that is LSA - latent semantic analysis
+the implementation uses SVD - single value decomposition 
+an SVD is a factorization - which is decomposing a matrix
+you take a matrix or table you have created
+using tf-idf and all that awesome
+then you break down this in to chunks using strict mathematical
+algorithm
+you extract out relationship constructs
+the mathematic pulls it out for you
+
+# LSA to the Rescue
+Latent Semantic Analysis (LSA) often remediates the curse of 
+dimensionality problem in text analytics
+- the matrix factorization has the effect of combining
+columns, potentially enriching signal in the data
+- By selecting a fraction of the most important singular values
+LSA can dramatically reduce dimensionality
+
+However, there's no free lunch:
+- Performing the SVD factorization is computationally intensive
+- the reduced factorized matrices (i.e., the 'semantic spaces')
+are approximations
+- we will need to project new data into the semantic space
+
+# SVD is effective and is a staple of text analytics pipelines!
+
+the matrix factorization has the effect of combining column
+LSA dramatically reduce dimensionality, for example from 
+26 thousand columns to 300
+but it is computationally intensive
+these semantic spaces are not exact, they are approximation
+of correlated terms and docs in to one concept
+the reduced matrices factorizations are the semantic spaces
+may lead to information loss but add signal so you get net gain
+vector space models - it only understand the data used
+svd is essentially defacto default
+So at a high level what do I do :
+I lower case , tokenize, stem, remove stopwords, tf-idf and svd
+all those things are pretty standard and produce very very good results
+
+#Projecting New Data
+- As with TF-IDF the use of SVD will require that new data be
+transformed/projected before predictions can be made!
+
+The following represents the high-level process for projection:
+- Normalize the document vector(i.e., row) using the term.frequency()
+function
+- Complete the TF-IDF projection using the tf.idf() function
+- Apply the SVD projection on the document vector
+
+Mathematically, the SVD projection for document d is:
+d^ = Sum of U^Td inverted
+
+
+to project new data we have to a bunch of manipulations
+on the data
+after we tokenize, then bigrams trigrams etc
+we normalize the rows using tf func
+complete the tf-idf process
+our training data is done
+and follow the same for test and production data
+then do the svd projection to reduce the number of columns
+d hat is our projected document
+d is the tf-idfed document
+
+- Use of irlba package to perform truncated SVD
+- How to project a TF-IDF document vector into the SVD semantic space
+(i.e., LSA)
+- Comparison of model performance between a single decision tree
+and the mighty random forest
+- Exploration of random forest tuning using the caret package 
+
+
+we'll leverage the irlba package for our singular value
+decomposition (SVD) 
+The irlba package allows us to specify 
+the number of the most important singular vectors we wish
+to calculate and retain for features
+
+Now we're actually going to do LSA using irlba package
+using SVD 
+this package does truncated SVD 
+svd is a mechan
+enrich our data by extracting higher level symantic feature
+truncated means of all the extracted terms I want only x number
+of svds
+for example only 300 most important LSAs
+this code will take a while to run
+the power we get from SVD costs processing power
+
+```{r}
+library(irlba)
+```
+
+```{r eval=FALSE}
+?irlba
+```
+
+Find a few approximate singular values and corresponding singular
+vectors of a matrix
+
+singular values are svds are pieces of mathematics are the extraction of
+higher level concepts
+there is a U matrix that represent corr of terms
+V are for documents
+row - documents, cols - terms ar used in irlba
+maxit - how many max iterations to find 300 svs
+
+irlba(A, nv = 5, nu = nv, maxit = 100, work = nv + 7, reorth = TRUE,
+tol = 1e-05, v = NULL, right_only = FALSE, verbose = FALSE,
+scale = NULL, center = NULL, shift = NULL, mult = NULL,
+fastpath = TRUE, svtol = tol, smallest = FALSE, ...)
+
+Arguments
+
+A  numeric real- or complex-valued matrix or real-valued
+sparse matrix.
+
+nv number of right singular vectors to estimate.
+
+nu number of left singular vectors to estimate (defaults to nv).
+
+maxit	maximum number of iterations.
+
+```{r eval=FALSE}
+# Time the code execution
+start.time = Sys.time()
+
+# Perform SVD, Specifically, reduce dimensionality down to 
+#300 columns for our latent semantic analysis (LSA)
+train.irlba = irlba(t(train.tokens.ug.bg.tfidf.df), nv=300, maxit = 600)
+
+# Total time of execution on workstation was
+total.time = Sys.time() - start.time
+total.time
+
+# Time difference of 13.9 mins on labtop
+
+# Take a look at the new feature data up close
+View(train.irlba)
+```
+
+Value returns a list with entries d u v etc
+shows 3901 rows and V1 to V300 singular values
+these values are the single most mathematical representation
+of the most important concepts 
+svd is one, neural networks are black box
+we can't know what those numbers are 
+now we can start building random forest
+
+As with Tf-IDF we will need to project new data (e.g., the test data)
+into the SVD semantic space.
+The following code illustrates how to do this using a row of the 
+training data that has already been transformed by TF-IDF 
+per the mathematics illustrated in the slides
+Imp function %*% is matrix multiplication
+
+```{r eval=FALSE}
+sigma.inverse = 1/train.irlba$d
+u.transpose = t(train.irlba$u)
+document = train.tokens.tfidf[1,]
+document.hat = sigma.inverse * u.transpose %*% document
+```
+
+Look at the first 10 components of projected document and the 
+corresponding row in our document semantic space (i.e., the v matrix)
+
+```{r eval=FALSE}
+document.hat[1:10]
+train.irlba$v[1, 1:10]
+```
+
+These values are not exactly same but very very close.
+The first three are exactly the same, fourth are slightly different
+cosine similarity added up for all these numbers is 1
+{like scaling }
+
+So how do we use that in practice?
+
+Create new feature data frame using our document semantic space of 300
+features (i.e., the V matrix from our SVD)
+
+```{r eval=FALSE}
+train.svd = data.frame[label = train$label, train.irlba$v]
+
+# Create a cluster to work on 10 logical cores
+cl = makeCluster(10,type="SOCK")
+registerDoSNOW(cl)
+
+# Time the code execution
+start.time = Sys.time()
+
+"
+This will be the last run using single decision trees
+With a much smaller feature matrix we can now use more
+powerful methods like the mighty Random Forest from now on!
+"
+rpart.cv.4 = train(label ~ ., data = train.svd, method = "rpart",
+                   trControl = cv.cntrl, tuneLength = 7)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Total time of execution on workstation was
+total.time = Sys.time() - start.time
+total.time
+
+```
+
+This is the last time we're going to use rpart.
+we will use random forest that will up the accuracy accuracy 0.93
+we saw earlier that accuracy with bigrams using single decision trees fell to 0.94 from 0.97.
+
+Good news is that we will gain more than we lost by using the mighty random forest
+
+# Ensemble Random Forest Model
+Note - The following code takes a long time to run
+
+Here's the math we are performing 10-fold CV repeated 3 times
+That means we need to build 30 models
+We are also asking caret to try 7 different values of the mtry parameter
+Next up by default a mighty random forest leverage 500 trees
+Lastly, caret will build 1 final model at teh end of the process with
+the best mtry value over all the training data
+Here's the number of tree we're building
+
+( 10*3*7*500) + 500 = 105,500 trees!
+
+On a workstation using 10 cores the following code took 28 minutes
+to execute
+
+
+We're going to use random forest because it best general purpose model
+it's powerful it's awesom - only it takes a long time to execute
+our process we follow is 10-fold cv 3 times
+and 7 times overall because we want to test the best parameter
+once the optimal values are found by caret
+it runs one more random forest of 500 trees
+that's a lot of processing
+good thing we will get good estimates
+
+
+We have reduced the dimensionality of our data using SVD
+Also, the application of SVD allows us to use LSA to simultaneously
+increase the information density of each feature. 
+To prove this out, leverage a mighty Random Forest with the default of 500 trees.
+we'll also ask caret to try 7 different values of mtry to find the mtry
+value that gives the best result!
+
+```{r eval=FALSE}
+# Create a cluster to work on 10 logical cores
+cl = makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+# Time the code execution
+start.time = Sys.time()
+
+
+rf.cv.1 = train(Label ~ ., data = train.svd, method = "rf",
+                trControl = cv.cntrl.tuneLength = 7)
+
+# Processing is done, stop cluster
+StopCluster(cl)
+# 
+
+# Total time of execution on workstation was
+ total.time = Sys.time() - start.time
+ total.time
+
+```
+
+Load the binary 
+
+```{r}
+load("C:/shobha/R/SVD/randomForest-Results/rf.cv.1.RData")
+
+# Check out our results
+rf.cv.1
+```
+
+Random Forest 
+
+3901 samples
+ 300 predictor
+   2 classes: 'ham', 'spam' 
+
+No pre-processing
+Resampling: Cross-Validated (10 fold, repeated 3 times) 
+Summary of sample sizes: 3511, 3510, 3511, 3511, 3511, 3511, ... 
+Resampling results across tuning parameters:
+
+  mtry  Accuracy   Kappa    
+    2   0.9618038  0.8128406
+   51   0.9675298  0.8446518
+  101   0.9675290  0.8448381
+  151   0.9675298  0.8450677
+  200   0.9664192  0.8404983
+  250   0.9662480  0.8396997
+  300   0.9664192  0.8405704
+
+Accuracy was used to select the optimal model using the largest value.
+The final value used for the model was mtry = 151.
+
+Accuracy 0.967 
+The final value used for the model was mtry = 151
+mtry is a parameter that control how much data gets used
+in building each individual tree
+that is number of columns get used to build the trees
+mtry of 300 implies all columns are used to build the tree
+it is usually in between the two extremes that the optimal value
+lies the best value was found with 151 values 
+which is 3 points higher than single decision tree rpart model
+
+
+Imp function confusionMatrix algorithm for modeling
+Moving on we can get more interesting results with 
+confusion matrix algorithm
+
+```{r eval=FALSE}
+?confusionMatrix
+```
+
+# Let's drill-down on the results
+
+```{r eval=FALSE}
+confusionMatrix(train.svd$Label, rf.cv.1$finalModel$predicted)
+```
+         Reference 
+Prediction ham spam
+    ham    3371  7
+   spam     117  406
+
+Accuracy : 0.9682
+95% CI : (0.9622, 0.9735)
+No Information Rate : 0.8941
+P-Value [Acc > NIR] : < 2.2e-16
+
+
+Kappa : 0.8497
+Mcnemar's Test P-Value : < 2.2e-16
+
+Sensitivity : 0.9665
+Specificity : 0.9831
+Pos Pred Value : 0.9979
+Neg Pred Value : 0.7763
+Prevalence : 0.8941
+Detection Rate : 0.8641
+Dectection Prevalence : 0.8659
+Balanced Accuracy : 0.9748
+
+'Positive' Class : ham
+
+#Apart from accuracy we can use many other metric
+
+
+Reference
+Pred    ham  spam
+ham   3371  7
+spam   117   406
+
+3371/(3371+117)
+#[1] 0.9664564 - Sensitivity - correct pos 
+
+117/(3371+117)
+
+406/(406+7)
+#[1] 0.9830508 - Specificity - correct neg
+
+
+7/(406+7)
+
+3371/(3371+7)
+#[1] 0.9979278 - Pos Pred value
+
+7/(3371+7)
+
+406/(117+406)
+#[1] 0.7762906 - Neg Pred value
+
+
+This part includes specific coverage of:
+- the importance of metrics beyond accuracy for building effective models
+- Coverage of sensitivity and specificity and their importance
+for building effective binary classification models
+- the importance of feature engineering for building the most
+effective binary classification models
+- how to identify if an engineered feature is likely to be effective
+in Production
+- Improving more model with an engineered feature
+
+it is arguably worse to classify legitimate msg as spam
+use this metric along with accuracy to see how well your
+model does
+we will discuss sensitivity and specificity 
+
+
+Confusion Matrix
+           Reference 
+               ham    spam
+Prediction   
+          ham   a     b
+         spam   c     d
+
+a: TP (true positive)  d: TP (true negative)
+b: FP (false positive) c: FN (false negative) 
+
+***Accuracy***
+what questions does the metric answer
+intuition of accuracy is simple
+what percentage of all predictions were correct?
+it is a ratio
+what we got right/correct divided by all my predictions
+Accuracy = (TP+TN)/
+
+***Sensitivity***
+what percentage of ham predictions were correct
+that is ratio of correct ham predictions over the total hams
+Sensitivity = TP/(TP+FN) = a/(a+c)
+
+***Specificity***
+what percentage of spam predictions were correct
+that is ratio of correct spam predictions over the total spams
+Specificity = TN/(FP+TN) = d/(b+d)
+
+Sensitivity is a very good metric to use 
+we don't want to identify this label as the other
+we want to reduce sensitivity
+this label can be classified as the other but not as bad
+we would prefer sensitivity to go up rather than specificity
+
+in our result Sensitivity is 0.9665 and Specificity is 0.9831
+so we want to improve our Sensitivity
+you remember we created a feature TextLength
+Let's add that to our svd features
+
+OK, now let's add in the feature we engineered previously for SMS
+```{r eval=FALSE}
+train.svd$TextLength = train$TextLength
+
+# Create a cluster to work on 10 logical cores
+cl = makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+# Time the code execution
+start.time = Sys.time()
+
+# Re-run the training process with the additional feature
+rf.cv.2 = train(Label ~ ., data = train.svd, 
+                method = "rf",
+                trControl = cv.cntrl,
+                tuneLength = 7,
+                importance = TRUE)
+
+"
+```
+Load the results from disk for above code
+it is the binary file for the execution
+so that you don't have to wait for 20-30 mins to execute 
+```{r}
+load("C:/shobha/R/SVD/randomForest-Results/rf.cv.2.RData")
+rf.cv.2
+```
+In this run the best value was of 101 columns(features) per tree
+Now the accuracy has gone up slightly, 0.97
+but is that enough, let's see from confusionMatrix
+
+```{r eval=FALSE}
+# Drill-down on the results
+confusionMatrix(train.svd$label, rf.cv.2$finalModel$predicted)
+```
+
+Our accuracy has gone up, and also our Sensitiviy and Specificity 
+has gone up we classified 7 more hams correctly we got more increase in classify spam as spam
+Sensitivity is the metric that will be used against the unseen data textlenth has added to 
+the predictive power.
+
+Let's take a look at feature importance
+see the parameter Important = TRUE
+
+How important was the new feature
+
+```{r}
+library(randomForest)
+#?varImpPlot
+varImpPlot(rf.cv.1$finalModel)
+varImpPlot(rf.cv.2$finalModel)
+```
+
+The main idea is to show you that some of the features will be
+way way more important than others in first plot X24 was most important
+with TextLength in second model, it is the most important feature 
+it has squished all of the features down in importance
+
+So what is the interpretation as a Data Scientist
+What should you think about this? And the simple answer to this is that TextLenght by far and a way 
+a better feature than any individual column that we were able to carve/extract out than using LSA latent symantic analytics that is our singular value decomposition our matrix factorization tried to extract as 
+much informatiion as they could out of those tf-idf unigrams or bigrams columns but there is not one 
+nearly as powerful as the TextLength And that happens quite a bit in Text Analytics
+
+Generally speaking the features most of the time tend to be relatively
+weak and the features that you can engineer as a data scientist will
+often be strongest and that's where you can really make yor money as a Data Scientist
+
+If you could just get away with just by creating the standard pipeline
+and tf-idf it and svd it and that get me home 99 percent of the time
+then Data Scientist position wouldn't be the best job
+in the world because it woudl be commoditized and automated
+it is because of this idea here - it is a very simple example - but
+this is where you add value as a data scientist is feature engineering
+because if you create features like this - TextLength - they will
+be disproportionately powerful and useful in text analytics scenario
+and that's where you're making money as a data scientist.
+
+# ***Cosine Similarity***
+
+This part includes specific coverage of:
+  * How cosine similarity is used to measure similarity between documents in vector space
+  * The mathematics behind cosine similarity
+  * Using cosine similarity in text analytics feature engineering
+  * Evaluation of the effectiveness of the cosine similarity feature
+
+
+So in the previous video we built a random forest not only with the textual features we had 
+but we also added in a feature we engineered earlier. 
+TextLength - adding it not only improved our accuracy overall it uplifted both our Sensitivity and our Specificity and as we saw there are many metrics we can use to guage how effective our model is 
+Sensitivity tells us how good is our model at predicting ham messages correctly and Specificity at predicting spam messages.
+
+TextLength not only improved our accuracy but also the Sensitivity and Specificity at the same time
+TextLength is indicative of the maybe textlength is a powerful feature that is universal - 
+and the idea or the hypothesis being that spam messages will be longer than ham messages therefore it may 
+be a universal feature that will always be predictive over time and space there is no guarantee of that of course but it is indicative as it raises both sensitivity and specificity.
+
+We could engineer another feature potentially and add it to the mix and see if we can get more 
+improvement and we mentioned we could use cosine similarity as the basis of that feature.
+
+So what is cosine similarity?
+
+We have used dot product of vectors as proxy for correlation for similarity
+vectors that are closer in vector space have higher dot product than those that are farther away
+
+
+Similarity in Vector Space and as you recall we had a hypothetical vector space 
+consisting of two-dimensions of our documents that have terms Foo and Bar in them
+and consequently we can map our vector representations based on their foo-ness and their bar-ness
+in this vector space model and what we saw Doc1 the green line and Doc2 the red line and we see that 
+they are not too close together Doc2 has a lot more Bar-ness than Foo-ness and Doc1 has more Foo-ness than Bar-ness and therefore they didn't seem to be too much alike and we confirmed that infact based on the dot product between the two they were infact not necessarily correlated but maybe there is a better way to understand the similarity between two vectors than using dot product and we said specifically that would be cosine similarity
+
+
+Why cosine similarity is better thant vector dot product?
+
+So instead of using the dot product if we can measure the angle between the two vectors maybe I can use a metric that is more powerful than the dot product and specifically we can use the cosine function cos theta
+there are some advantages to using cosine rather than some other trigonometric function like sine or tangent.
+
+We can measure the similarity between the two docs Doc1 and Doc2 in the vector space by measuring the cosine of the angle theta between them now if you recall we also had a Doc3 represented as blue line in the vector space of Foo and Bar and if the angel between Doc1 and Doc3 is alpha then we can also measure the cosine between Doc1 and Doc3 using the cosine value of alpha then by comparing cos theta vs cos alpha we can get more definitive understanding of which document vectors are more like others.
+
+- Using the cosine between document vectors is an improvement over the dot product.
+- Advantages of using cosine for document similarity:
+- Given our representations, the cosine will be between [0,1]
+- Metric works will in high dimensional spaces
+
+The cosine will be between 0 and 1 which is nice because before we saw that dot products could
+be any arbitrary number 106, next 212, 95 you don't know all you could talk about was the relative magnitude of the numbers not necessarily getting anything definitive but given our representation, the way we represent our vectors in vector space we will get a cosine value of 0 and 1 which is nice because we know that a 1 necessarily means perfect similarity so a cosine value of 1 means the documents are exactly the same 
+basically they have exactly the same number of words in if we're using bi-grams and tri-grams they have the same exact order and so on and so forth and you could see two lines on your graph overlapping in case of cosine similarity of 1 cosine zero would be 90 degree angel they are completely orthogonal, so in our vector space Doc1 would only have Foo in it and Doc2 would only have Bar in it and they would be orthogonal, they would be at right angles and their cosine would be zero in that case.
+
+Cosine similarity also nice because it works very very well in high dimensional spaces
+and as we have talked about before and as we added bi-grams to our data frame text analytics is a high dimensional problems it suffers from the curse of dimensionality big time it's not uncommon to have tens of thousands of features, 100 thousand features, 200 thousand features it all depends on the size of your 
+corpora  it all depends on how many documents you have in each of the corpuses you are looking at
+in the worst case you have a large corpus having many documents and the documents happen to be big
+For example, imagine doing text analytics on each science fiction novel published in the United States in the twentieth century you data frame would be gargantuan and usually cosine similarity works very very well in high dimensionality of course you would have to svd to shrink it down.
+ 
+
+Cosine Similarity is measure of relativity not percentage
+
+cosine calculation using dot product over some pythagorean theorem 
+PT works well in high dimensional space, it scales
+cosine similarity of Doc1(6,10) and Doc2(10,3)
+(6*10 + 10*3)/( sqr-root(6^2+ 10^2) + sqr-root(10^2 + 3^2) )
+= (60 + 30)/( sqr-root(36+ 100) + sqr-root(100 + 9) )
+= (90)/( sqr-root(136) + sqr-root(109) )
+= 0.7391963
+
+We can use the R libraries to calculate similarly for Doc1 and Doc3 is 0.9518606
+Do NOT interpret this are percentage it is a measure of relativity 
+You can say Doc1 & Doc3 are 21% more similar than Doc1 & Doc2
+but you can't say Doc1 & Doc2 are 74% similar or Doc1 & Doc 3 are 95% similar
+You can compare the cosine similarities
+
+# Let's look at some  R code
+Cosine similarity between any sms message and a typical spam message.
+
+
+Turns out that our TextLength feature is very predictive and pushed our overall 
+accuracy over the training data to 97.1 %
+We can also use the power of cosine similarity to engineer
+a feature for calculating, on average, how alike each SMS message
+is to all of the spam messages.
+
+The hypothesis here is that our use of bigrams, tf-idf, and LSA have
+produced a representation where ham SMS messages should have low
+cosine similarities with spam SMS messages and vice versa
+
+```{r eval=FALSE}
+# Use the lsa package's cosine function for our calculations
+# install.packages("lsa")
+library(lsa)
+?cosine
+```
+Calculates the cosine measure between two vectors or between all column
+vectors of a matrix
+
+```{r eval=FALSE}
+train.similarities = cosine(t(as.matrix(train.svd[, -c(1,ncol(train.svd))])))
+
+# let's unpack this line of code
+dim(train.svd)
+```
+[1] 3901 302
+3901 - rows - docs
+col 1 - label
+300 cols - svds
+col 302 - TextLength
+
+We have to remove TextLenght because it is not in our vector space
+and remove label therefore -c(1,last column) transform the data frame with 300 columns to matrix because cosine function only works on matrix and then transpose it to flip the rows and coln because cosine uses column vectors 
+each column has term frequencies for a document so cosine will work on 3901 vectors, each with 300 elements which correspond to the svd doc-term-freq to term-doc-freq
+and cosine will return a matrix with 3901 by 3901 having cosine similarities between them.
+
+```{r eval=FALSE}
+dim(train.similarities)
+```
+[1] 3901 3901
+
+Next up - take each SMS text message and find what the mean cosine similarity is for each SMS text mean with each of the spam SMS messages. Per our hypothesis, ham SMS 
+text messages should have relatively low cosine similarities with spam messages and vice versa.
+
+```{r eval=FALSE}
+spam.indexes = which(train$label == "spam")
+
+# new column SpamsSimilarity and fill it with zeros
+train.svd$SpamSimilarity = rep(0,0, nrow(train.svd))
+```
+For each row/doc the spamSimilarity is the avg of the spam indexes in that row or the current row
+
+train.similiarities is 3901x3901 marix with cosine similarities we will extract all the spam cosines only and average it
+
+```{r eval=FALSE}
+#train.svd$SpamSimilarity = apply(train.similarities[,spam.indexes],mean)
+
+for(i in 1:nrow(train.svd)){
+  train.svd$SpamSimilarity[i] = 
+    mean(train.similarities[i, spam.indexes])
+}
+```
+So, what I'm going to do is engineer a new feature 
+
+So if I pull out all of the spam messages what are the documnet rows that are spam messages and say I have an hypothesis that on an average any given spam message is going to have a higer average cosine similarity with all other spam messages than with ham one that's going to be the hypothesis this idea is an assumption we're making so we'll have a new feature. 
+
+'{# mean of two numbers close to each other will be almost similar
+so we calculate mean for current cosine and that of all spam mesages
+for the each of 3901 rows or docs}'
+
+
+We get spam indexes as 1:523 
+So out of 3901 sms messages in training data we have 523 spams
+that out of 3901 documensts 523 are spam and spam.indexes holds those row indexes
+I'm using for loop because it is relatively intuitive tho not a best practise in R
+create the new feature and fill it with zeros iterate through each document to 
+calculate mean cosine similarity for the current doc and the spam docs
+
+Now, not surprisingly we can see in spreadsheet but it is better to 
+visualize visualize visualize visualize
+
+```{r eval=FALSE}
+# As always, let's visualize our results using ggplot2
+ggplot(train.svd, aes(x=SpamSimilarity, fill = Label)) +
+  theme_bw() +
+  geom_histogram(binwidth = 0.05) +
+  labs(y = "Message Count",
+       x= "Mean Spam Message Cosine Similarity",
+       title = "Distribution of Ham vs. Spam Using Spam Cosine Similarity")
+```
+The plot is indicative of our hypothesis Ham messages have low cosine similarity with spam messages.
+
+Let's verify with our model
+
+Per our analysis of random forest results we are interested in features that can raise model performace with respect to sensitivity. Perform another CV process using the new spam cosine similarity feature
+
+```{r eval=FALSE}
+# Create a cluster to work on 10 logical cores
+cl = makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+# Time the code execution
+start.time = Sys.time()
+
+# Re-run the training process with the additional feature
+rf.cv.3 = train(Label ~ ., data = train.svd, method = "rf",
+                trControl = cv.cntrl, tuneLength = 7,
+                importance = TRUE)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Load the cached binaries version of this run
+# from Github and load it up
+# Load results from the disk
+# rf.cv.3 has results of rf.cv.2 by mistake I think
+load("C:/shobha/R/SVD/randomForest-Results/rf.cv.3.RData")
+
+# Check the results
+rf.cv.3
+```
+ mtry   Accuracy   Kappa
+2     0.9643668  0.8270167
+52     0.9777858  0.8994841
+102     0.9773567  0.8985124
+152     0.9776133  0.8998202
+202     0.9770153  0.8973524
+252     0.9771867  0.8982968
+302     0.9769309  0.8968488
+
+
+Accuracy was used to select the optimal model using the largest value.
+
+The final value used for the model was mtry = 52
+
+
+notice that mtry is 52 for highest accuracy
+accuracy is going up and the number of random features is down
+
+Let's take a look at the confusion matrix
+
+```{r eval=FALSE}
+# Drill-down on the results
+confusionMatrix(train.svd$Label, rf.cv.3$finalModel$predicted)
+
+```
+Confusion Matrix and Statistics
+
+            Reference 
+                ham  spam
+Prediction ham  3365  13
+          spam    69  454
+
+
+Accuracy : 0.979
+95% CI : (0.974, 0.9832)
+No Information Rate : 0.8803
+P-Value [Acc > NIR] : < 2.2e-16
+
+
+Kappa : 0.9052
+Mcnemar's Test P-Value : < 2.2e-09
+
+Sensitivity : 0.9799
+Specificity : 0.9722
+Pos Pred Value : 0.9962
+Neg Pred Value : 0.8681
+Prevalence : 0.8803
+Detection Rate : 0.8626
+Dectection Prevalence : 0.8659
+Balanced Accuracy : 0.9760
+
+'Positive' Class : ham
+
+So our accuracy went up to 97.9 98% which is great! sweet
+here's the kicker our sensitivity went up by more than 1% 97
+and our specificity 
+our customers are going be more forgiving a spam msg coming
+in as ham but not vice versa 
+so what this shows that maybe we found a feature that we can put together 
+with textlength and other svds and get a pretty awesom model with accuracy of 98%
+
+Let's take a look at the importance plot to find how imp our new feature was
+How important was this feature?
+
+```{r eval=FALSE}
+library(randomForest)
+rf.cv.3 = load("C:/shobha/R/SVD/randomForest-Results/rf.cv.3.RData")
+varImpPlot(rf.cv.3$finalModel)
+```
+We can see how SpamSimilarity dwarfs even textlength but it may also be indicative of overfitting because if you remember textLength raised both Sensitivity and Specificity both at the same time 
+SpamSimilarity raised Sensitivity but reduced specificity which is great from the business perspective but when this is combined with the fact how it is so much more important than the other features.
+we'll test on test data and see if this SpamSimilarity is really as awesome
+
+
+# Our First Test 
+
+This part includes specific coverage of:
+
+- Pre-processing new, unseem textual data to allow for predictions from our trained model
+- The importance of caching the IDF values calcuated from the training data set to TF-IDF new, unseen, pre-processed data 
+- performing SVD projections of new, unseen, pre-processed textual into the latent semantic space
+- creating predictions and evaluating model effectiveness in the context of accuracy, sensitivity, and specificity
+
+R studio env where all of the code through video 10 has been executed
+and at end of video 10 we built a very powerful model a model that achieved more than 97 percent accuracy 
+in terms of detecting ham vs spam in our text messages as measured by 10-fold cross validation repeated 3 times we used mighty random forest that code took a long time to run so we loaded up some binaries that were cached in Github to see what the performance was when we plotted the importance graph.
+
+SpamSimilarity dwarfed all the other features we had we also saw that though SpamSimilarity was important it may pose us the problem of overfitting for two reasons 
+one that it dominates everything else and two that when we look at sensitivity and specificity we saw that this feature increased our ability to detect ham correctly but it decreased our ability to detect spam correctly so it didn't raise both those metrics simultaneously that could be indicative of potential overfit
+and there is one way to be absolutely sure about that which is let's start preping our test data
+the 30 percent that we held out for testing that needs but it hasn't been pre-processed
+We have done a lot of work on our training data 
+- we have tokenized, lower-cased, removed stopwords
+- we have done stemming, added bi-grams
+- we have done things like tf-idf 
+then saved 
+
+All of those things have to be done on text data as well because we have a trained model but we've pre-processed the training data so much that the model can work with data in that similar format
+so everything we've done to the training data we have to do to the test data as well to get it in the right format, in the right symantic space, to get it in the right geometry so that it will work in our right trained model that's what we're going to do
+
+
+```{r eval=FALSE}
+# Tokenization
+test.tokens = tokens(test$Text, what = "more", 
+                     remove_numbers = TRUE,
+                     remove_punct = TRUE,
+                     remove_symbols = TRUE,
+                     remove_hyphens = TRUE)
+
+
+# Lower case the tokens
+test.tokens = tokens_tolower(test.tokens)
+
+# Stopword removal
+test.token = tokens_select(test.tokens, stopwords(),
+                           selection =  "remove")
+
+# Stemming
+test.tokens = tokens_wordstem(test.tokens, language = "english")
+
+# Add bigrams
+test.tokens = tokens_ngrams(test.tokens, n = 1:2)
+
+# Convert n-grams to quanteda document-term frequency matrix
+test.tokens.dfm = dfm(test.tokens, tolower = FALSE)
+
+# Explore the train and test quanteda dfm objects
+train.tokens.dfm
+# Document-feature matrix of: 3901 documents, 29297 features (99.9% sparse)
+
+test.tokens.dfm
+# Document-feature matrix of: 1671 documents, 14,832 features (99.9% sparse)
+```
+Test has less than half the number of documents and less than half number of features
+than train data not surprisingly our ml model that we've trained expects the same features 
+that it has always seen 29,297 unigrams and bigrams are the features the model expects at least
+that's the contract you and I have because our model is expecting 29,297 features wide you can send me more data but at least those many that I expect
+
+In text analytics we train on a historical sort of data that has unigrams, bigrams or trigrams 
+that represent the data you had at that point of time it is possible that when you move you test model to production the documents could have new words in them in texts and tweets this is extremely important 
+but in production you will see words of different types so we're going to morph our data so that it looks 
+like our training data 
+you have to realise that in TA once you put your model in production eventually becomes stale 
+that sheer amount of data that you have never seen before becomes so valuable that you need to retrain and 
+re model so that's one thing you need to be clear on when you ar engaging in such types of projects with your stakeholders is that look when we build the TA model in production you're not done that model will need constant care and feeding and refreshing over time it's going need new budget, new staff to do that sort of work 
+so we have got our dfms we need to make sure that our test dfms data frames have to look exactly like our data frames used for training because if we don't then when we do tf-idf, svd it won't be valid those transformations on test data won't be valid so our predictions will not be valid so we have to ensure that after pre-processing our test dfm is exactly the same in terms of number of columns and exactly 
+in the same order and it also has to have the same meaning in terms of the order so if column 37 in training data, for example, was fluke then in test data also column 37 should be fluke so they have to be exactly aligned 
+
+Ensure the test dfm has the same n-grams as training dfm
+
+NOTE - In production we should expect that new text messages will contain n-gram that did not exist in the original training data. As such, we need to strip those n-grams out
+
+```{r eval=FALSE}
+?dfm_select 
+# select features from a dfm or fcm
+```
+
+```{r eval=FALSE}
+test.tokens.dfm = dfm_select(test.tokens.dfm, features = train.tokens.dfm)
+test.tokens.matrix = as.matrix(test.tokens.dfms)
+test.tokens.dfms
+```
+Document-feature matrix of: 1,671 documents, 29,297 features (100% sparse)
+
+We have enforced the train dfm structure on test df. Now we can go ahead and apply the transformations 
+tf-idf and svd. Notice this is the reason we have to cache the original tf-idf values.
+
+With the raw test features in place next up is the projecting the term counts for the unigrams 
+into the same TF-IDF vector space as our training data.
+
+The high level process is as follows:
+1 - Normalize each document (i.e. each row)
+2 - Perform IDF multiplication using training IDF values
+
+```{r eval=FALSE}
+# Normalize all documents via TF
+test.tokens.df = apply(test.tokens.matrix, 1, term.frequency)
+```
+str(test.token.df)
+num[1:29297, 1:1671]
+- attr(*, "dimnames")=List of 2
+... $ : chr [1:29297] "go" "jurong" "well" "point" ...
+... $ : chr [1:1671] "text1" "text2" "text3" "text4"
+
+terms are rows and docs are columns
+
+```{r eval=FALSE}
+# Lastly, calculate TF-IDF for our training corpus
+test.tokens.tfidf = apply(test.tokens.df, 2, tf.idf, idf = train.tokens.idf)
+dim(test.tokens.tfidf)
+view(test.tokens.tfidf[1:25, 1:25])
+
+# Transpose the matrix
+test.tokens.tfidf = t(test.tokens.tfidf)
+
+# Fix incomplete cases
+summary(test.tokens.tfidf[1,])
+test.tokens.tfidf[is.na(test.tokens.tfidf)] = 0.0
+summary(test.tokens.tfidf[1,])
+```
+With the test data projected into the TF-IDF vector space of the training
+data we can now do the final projection into the training LSA semantic
+space (i.e., the SVD matrix factorization)
+
+```{r eval=FALSE}
+test.svd.raw = t(sigma.inverse * u.transpose %*% t(test.tokens.tfidf))
+dim(test.svd.raw)
+```
+[1] 1671 300
+
+We have now projected our test data into the same semantic space that our train data resides.
+
+Lastly, we can now build the test data frame to feed into our trained machine learning model for prediction. First up, add Label and TextLength
+
+```{r eval=FALSE}
+test.svd = data.frame(label = test$label, test.svd.raw, TextLength = test$TextLength)
+```
+Next step, calculate SpamSimilarity for all the test documents.
+First up, create a space similarity matrix, grab the vectors that correspond to spam, particularly doc vectors that gives us df with documents we care about
+
+```{r eval=FALSE}
+test.similarities = rbind(test.svd.raw, train.irlba$v[spam.indexes, ])
+test.similarities = cosine(t(test.similarities))
+
+
+# let's calculate cosines between them
+test.svd$SpamSimilairity = rep(0.0, nrow(test.svd))
+spam.cols = (nrow(test.svd) + 1):ncol(test.similarities)
+for(i in 1:nrow(test.svd)){
+  test.svd$SpamSimilarity[i] = mean(train.similarities(i, spam.cols))
+}
+```
+Now we can make predictions on the test data set using our trained mighty
+random forest, take our third random forest model
+
+```{r eval=FALSE}
+preds = predict(rf.cv.3, test.svd)
+
+# Drill-in on results
+confusionMatrix(preds, test.svd$Label)
+```
+Confusion Matrix and Statistics
+
+Reference 
+                  ham  spam
+Prediction  ham   1447  224
+            spam    0   0
+
+
+Accuracy : 0.8659
+95% CI : (0.8487, 0.8819)
+No Information Rate : 0.8659
+P-Value [Acc > NIR] : 0.5178
+
+
+Kappa : 0
+Mcnemar's Test P-Value : < 2.2e-09
+
+Sensitivity : 1.0000
+Specificity : 0.0000
+Pos Pred Value : 0.8659
+Neg Pred Value :    NAN
+Prevalence : 0.8659
+Detection Rate : 0.8659
+Dectection Prevalence : 1.0000
+Balanced Accuracy : 0.5000
+
+'Positive' Class : ham
+
+Model is doing much worse than train data sensitivity is 100 percent - because model predicts everything as ham model automatically assumes everything is spam
+but we stratified our test data so this is not correct.
+SpamSimilarity is too tightly bound to train data appears it's too risky indicative of overfitting we have discussed one of the most important thing in ruling out a production text analytics solution and that is being very deliberate being very careful to ensure that when we have brand new data, in this case sms text msgs that come into this system that we we perform all the transformations token, lowercase, stopword removal, stemming , bigram, td-ifd, svd to make sure that test data lands in a format lands in a geometry that our trained model understands and works productively if you do something funcky, there is bug you will not get any error msg but suboptimal prediction or you make a mistake in your pipeline and you get a error message we'll see how to fix this error of overfitting 11 percent lower on accuracy on our test data hold out and we'll see how by removing SpamSimilarity feature we'llactually improve our accuracy in our test hold out which shows us that removing SpamSimilarity is indicative of producing a model that is more generalizable that is will work better on unseen data in production
+
+
+
+#-------------  Conclusion -----------------#
+"
+This part concludes the series and covers:
+- optimizing our model for the best generalizability on new/unseen data
+- Discussion of the sensitivity/specificity tradeoff of our optimized model
+- Potential next steps regarding feature engineering and algorithm 
+selection for additional gains in effectiveness
+- For those that are interested, a collection of resources for further
+study to broaden and deepen their text analytcs skills
+
+Now, what we ended up previously was a bad spot
+specifically we saw that on our test run our mighty
+random forest which scored a 97 perceent accuracy in our
+cross validation runs infact scored quite a bit less
+almost 11 % less in accuracy 
+And we had an hypothesis early on that was going 
+because we engineered a feature in our training data 
+which essentially said look for each individual text msg
+in the training set what was its average cosine similarity 
+to all of spam messages to the training set 
+we saw that it was a pretty good feature, it gave us a lot of power
+a lot of predictive power in our cross validation runs
+however, we also hypothezised, we also worried that that
+feature may overfit because the characteristics of spam  
+in training set may not necessarily be the same as in test set
+and ergo(therefore) that feature may be very powerful but only 
+in terms of the training data 
+one definition of overfitting is when you do much much better on the 
+training data than you see on test or unseen data as we see here
+and worse than accuracy was the actual behaviour we saw
+everything is predicted as ham
+none of the test data is spam it's all good 
+and we know that to be patternly false
+the model we trained cannot recognize spam 
+the model has almost memorized the characteristics of ham and spam
+data in training set and because it is so specialized it fails with unseen data
+
+So let's back paddle a little
+and remove the cosine similarity from the training data
+and see if we can some generalization back in to the model
+
+The definition of overfitting is doing far better on the training data
+as evidenced by CV than doing on a hold-out dataset (i.e., our test dataset)
+one potential explanation of this overfitting is the use of the spam
+similarity feature. The hypothesis here is that spam features
+(i.e., text content) varies highly, especially over time
+As such, our average spam cosine similarity is likely to overfit
+to the training data 
+To combat this, let's rebuild a mighty random forest without the spam similarity feature 
+In R if df column is assinged null it is removed we're removing SpamSimilarity from both train and test
+
+```{r eval=FALSE}
+
+train.svd$SpamSimilarity = NULL
+test.svd$SpamSimilarity = NULL
+
+
+# Create a cluster to work on 10 logical cores
+cl = makeCluster(3, type="SOCK")
+registerDOSNOW(cl)
+
+
+# Time the code execution
+start.time = Sys.time()
+
+# Re-run the training process with the additional feature
+set.seed(3892473)
+# Note: Don't set seed in production env
+
+rf.cv.4 = train(Label~., data = train.svd, method = "rf",
+                trControl = cv.cntrl, tuneLength = 7,
+                importance = TRUE)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+
+# Total time of execution on workstation was
+total.time = Sys.time() - start.time
+total.time
+
+# Time difference of 2.535421 hours
+
+
+# Make predictions and drill-in on the results
+preds = predict(rf.cv.4, test.svd)
+confusionMatrix(preds, test.svd$Label)
+
+```
+Confusion Matrix and Statistics
+
+              Reference 
+                  ham  spam
+Prediction  ham   1447  59
+            spam    0   165
+
+
+Accuracy : 0.9647
+95% CI : (0.9547, 0.973)
+No Information Rate : 0.8659
+P-Value [Acc > NIR] : < 2.2e-14
+
+
+Kappa : 0.8289
+Mcnemar's Test P-Value : 4.321e-14
+
+Sensitivity : 1.0000
+Specificity : 0.7366
+Pos Pred Value : 0.9608
+Neg Pred Value : 1.0000
+Prevalence : 0.8659
+Detection Rate : 0.8659
+Dectection Prevalence : 0.9013
+Balanced Accuracy : 0.8683
+
+'Positive' Class : ham
+
+
+So we can see that our accuracy jumped up to 96 percent from 86 percent
+almost a 10 percent jump in accuracy by removing the spam similarity feature
+generalization score without spamsimilarity and with textleghtn is good
+very good at predicting ham sensitivity is high
+our prediction of ham is corect, all 1447 were predicted as ham
+also 59 spams got through as ham which is why our specificity is 0.73
+a little bit of spam getting thru is acceptable
+you can tell the business decision makers that 
+so lastly take a look at our cv run
+so we can compare what the cv estimates were vis-a-vis (french with regar to)
+(viza vi)our test hold outs
+
+
+```{r}
+load("C:/shobha/R/SVD/randomForest-Results/rf.cv.4.RData")
+rf.cv.4
+```
+Random Forest
+3901 samples
+301 predictors
+2 classes: 'ham','spam'
+
+No pre-processing
+Resampling: Cross-validated (10 fold, repeated 3 times)
+Summary of sample sizes: 3511, 3510, 3511, 3511, 3511, ...
+Resampling results across tuning paramters:
+
+mtry   Accuracy     Kappa
+2    0.9624875    0.8147416
+51    0.9689811    0.8520439
+101    0.9704330    0.8597198
+151    0.9694941    0.8551226
+201    0.9700917    0.8585923
+251    0.9680389    0.8489895
+301    0.9675254    0.8467893
+
+Accuracy was used to select the optimal model using the largest value
+The final value used for the model was mtry=101
+
+
+These features are good for generalization, you have got a firm foundation for TA
+
+What Next?
+Feature Engineering: 
+take the code and engage in some feature engineering to improve
+the performance
+- How about tri-grams, 4-grams, etc.?
+- we engineered textLength 
+- are there other features as well?
+we saw that TL was good generalizable
+what are some other features
+
+# Algorithms 
+- we leverged a mighty random forest but could other
+other algorithms do more wiht the data?
+Boosted decision trees?
+Support vector machines (SVM)?
+TA explodes your features but they're all sparse
+SVM could be good for that
+
+Learn more ways to analyze, understand and work with test!
+Start Here - The Basics
+Text Analysis with R for Students of Literature
+by Matthew L. Jockers
+this is the best introduction the basics of TA
+it is accessible to a very broad audience
+it also illustrated many techniques not in series(e.g. topic modeling)
+
+Next Stop - Java!?!?
+Taming Text - written for Java developers
+however, a lot of theory easily implemented with R packages
+it provides you a good foundation
+you will understand teh packages
+Coverage of teh Java OpenNLP library which has an R package
+reading this book will teach you openNLP
+
+Survey the R Text Universe
+Many many packages in R support text analytics
+After studying "Taming Text" you'll know a lot more abour
+what packages your need for what problem
+Check out the CRAN NLP Task view for all the tasty R goodness
+
+Search == Text Analytics
+Introduction to Information Retrieval - Christopher D Manning
+Much of IR relates to text analytics
+This is the single best resource on IR for beginners
+talks about single value decomposition, LSA
+in IR they call LSA LSI Latent semantic indexing
+this book talks a lot about vector space model
+it talks about cosine similarity 
+it talks about naiive bayes 
+it talks about a lot of stuff
+so this is a really really good book for you to go in to it
+to expand your knowledge and understanding more
+because think about it if you have to search through a 
+mountains of text and you have to do text analytics and understand
+those features and structure my solution such that my search
+engine gives relevant results 
+most of these tools and techniques are also used for classification
+as well
+so the good news is this book is available for free online
+from Standford!
+highly recommend this book
+
+# Last Stop - Python!?!?
+Python has the Natural Language Toolkit (NLTK)
+- pure awesomeness
+you just need one thing
+As with .Taming Text' this book contains a lot of theory to take your
+skills to the next level
+Everything you can do with the NLTK you can do with R packages
+you can read the book to understand the concepts and theory
+
+If you go through this list I provided and study them in detail
+you will  be very very far along in terms of text analytics 
+you will be able to do a lot of really awesome cool things in your daily
+work
+"
+
+
+
+
+
+
+
